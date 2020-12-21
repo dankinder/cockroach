@@ -533,6 +533,6 @@ func TestDatabaseScope(t *testing.T) {
 	newFileTableReadWriter, err := filetable.NewFileToTableSystem(ctx,
 		"newdb.file_table_read_writer", executor, security.RootUser)
 	require.NoError(t, err)
-	_, err = newFileTableReadWriter.ReadFile(ctx, "file1")
+	_, _, err = newFileTableReadWriter.ReadFile(ctx, "file1", 0)
 	require.True(t, os.IsNotExist(err))
 }
