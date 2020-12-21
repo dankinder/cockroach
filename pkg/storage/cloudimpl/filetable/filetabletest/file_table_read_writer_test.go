@@ -166,8 +166,9 @@ func TestReadWriteFile(t *testing.T) {
 	testFileName := "testfile"
 
 	isContentEqual := func(filename string, expected []byte, ft *filetable.FileToTableSystem) bool {
-		reader, err := fileTableReadWriter.ReadFile(ctx, filename)
+		reader, size, err := fileTableReadWriter.ReadFile(ctx, filename, 0)
 		require.NoError(t, err)
+		require.Equal(t, int64(len(expected)), size)
 		got, err := ioutil.ReadAll(reader)
 		require.NoError(t, err)
 		return bytes.Equal(got, expected)
@@ -350,8 +351,9 @@ func TestUserGrants(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read file to test SELECT privilege.
-	reader, err := fileTableReadWriter.ReadFile(ctx, "file1")
+	reader, size, err := fileTableReadWriter.ReadFile(ctx, "file1", 0)
 	require.NoError(t, err)
+	require.Equal(t, int64(len(expected)), size)
 	got, err := ioutil.ReadAll(reader)
 	require.NoError(t, err)
 	require.True(t, bytes.Equal(got, expected))
@@ -518,8 +520,9 @@ func TestDatabaseScope(t *testing.T) {
 	uploadedContent, err := uploadFile(ctx, "file1", 1024, 10,
 		fileTableReadWriter, kvDB)
 	require.NoError(t, err)
-	oldDBReader, err := fileTableReadWriter.ReadFile(ctx, "file1")
+	oldDBReader, oldDBSize, err := fileTableReadWriter.ReadFile(ctx, "file1", 0)
 	require.NoError(t, err)
+	require.Equal(t, int64(len(uploadedContent)), oldDBSize)
 	oldDBContent, err := ioutil.ReadAll(oldDBReader)
 	require.NoError(t, err)
 	require.True(t, bytes.Equal(uploadedContent, oldDBContent))

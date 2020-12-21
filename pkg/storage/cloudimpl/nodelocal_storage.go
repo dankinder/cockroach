@@ -121,7 +121,7 @@ func (l *localFileStorage) ReadFileAt(
 		// The local store returns a golang native ErrNotFound, whereas the remote
 		// store returns a gRPC native NotFound error.
 		if os.IsNotExist(err) || status.Code(err) == codes.NotFound {
-			return nil, errors.Wrapf(ErrFileDoesNotExist, "nodelocal storage file does not exist: %s", err.Error())
+			return nil, 0, errors.Wrapf(ErrFileDoesNotExist, "nodelocal storage file does not exist: %s", err.Error())
 		}
 		return nil, 0, err
 	}

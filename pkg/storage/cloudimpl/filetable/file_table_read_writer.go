@@ -11,12 +11,12 @@
 package filetable
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"database/sql/driver"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"os"
 	"strings"
 
@@ -165,16 +165,16 @@ type FileToTableSystem struct {
 }
 
 // FileTable which contains records for every uploaded file.
-const fileTableSchema = `CREATE TABLE %s (filename STRING PRIMARY KEY, 
+const fileTableSchema = `CREATE TABLE %s (filename STRING PRIMARY KEY,
 file_id UUID UNIQUE NOT NULL DEFAULT gen_random_uuid(),
-file_size INT NOT NULL, 
-username STRING NOT NULL, 
+file_size INT NOT NULL,
+username STRING NOT NULL,
 upload_time TIMESTAMP DEFAULT now())`
 
 // PayloadTable contains the chunked payloads of each file.
-const payloadTableSchema = `CREATE TABLE %s (file_id UUID, 
-byte_offset INT, 
-payload BYTES, 
+const payloadTableSchema = `CREATE TABLE %s (file_id UUID,
+byte_offset INT,
+payload BYTES,
 PRIMARY KEY(file_id, byte_offset))`
 
 // MaybeExpandQuotedTableName checks if the existing table prefix is quoted,
@@ -643,36 +643,12 @@ func (w *chunkWriter) Close() error {
 	return err
 }
 
-// fileReader reads the file payload from the underlying Payload table.
-type fileReader struct {
-	io.Reader
-}
-
-var _ io.ReadCloser = &fileReader{}
-
-// Close implements the io.Closer interface.
-func (f *fileReader) Close() error {
-	return nil
-}
-
-func newFileReader(
-	ctx context.Context,
-	filename, username, fileTableName, payloadTableName string,
-	ie *sql.InternalExecutor,
-) (io.ReadCloser, error) {
-	fileTableReader, err := newFileTableReader(ctx, filename, username, fileTableName,
-		payloadTableName, ie)
-	if err != nil {
-		return nil, err
-	}
-	return &fileReader{fileTableReader}, nil
-}
-
 func newFileTableReader(
 	ctx context.Context,
 	filename, username, fileTableName, payloadTableName string,
 	ie *sql.InternalExecutor,
-) (io.Reader, error) {
+	offset int64,
+) (io.ReadCloser, int64, error) {
 	// Get file_id from metadata entry in File table.
 	fileIDQuery := fmt.Sprintf(`SELECT file_id FROM %s WHERE filename=$1`, fileTableName)
 	fileIDRow, err := ie.QueryRowEx(
@@ -680,12 +656,12 @@ func newFileTableReader(
 		nil /* txn */, sessiondata.InternalExecutorOverride{User: username}, fileIDQuery, filename,
 	)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	// If no metadata entry was found return a does not exist error.
 	if fileIDRow == nil {
-		return nil, os.ErrNotExist
+		return nil, 0, os.ErrNotExist
 	}
 
 	query := fmt.Sprintf(`SELECT payload FROM %s WHERE file_id=$1`, payloadTableName)
@@ -694,7 +670,7 @@ func newFileTableReader(
 		nil /* txn */, sessiondata.InternalExecutorOverride{User: username}, query, fileIDRow[0],
 	)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	// Verify that all the payloads are bytes and assemble bytes of filename.
@@ -703,22 +679,31 @@ func newFileTableReader(
 		fileBytes = append(fileBytes, []byte(tree.MustBeDBytes(row[0]))...)
 	}
 
-	return bufio.NewReader(bytes.NewBuffer(fileBytes)), nil
+	size := int64(len(fileBytes))
+
+	// TODO(dt): only fetch needed rows above using offset.
+	if offset > 0 {
+		fileBytes = fileBytes[offset:]
+	}
+
+	return ioutil.NopCloser(bytes.NewReader(fileBytes)), size, nil
 }
 
 // ReadFile returns the blob for filename using a FileTableReader.
 // TODO(adityamaru): Reading currently involves aggregating all chunks of a
 // file from the Payload table. In the future we might want to implement a pull
 // x rows system, or a scan based interface.
-func (f *FileToTableSystem) ReadFile(ctx context.Context, filename string) (io.ReadCloser, error) {
+func (f *FileToTableSystem) ReadFile(
+	ctx context.Context, filename string, offset int64,
+) (io.ReadCloser, int64, error) {
 	e, err := resolveInternalFileToTableExecutor(f.executor)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
-	var reader, readerErr = newFileReader(ctx, filename, f.username, f.GetFQFileTableName(),
-		f.GetFQPayloadTableName(), e.ie)
-	return reader, readerErr
+	return newFileTableReader(
+		ctx, filename, f.username, f.GetFQFileTableName(), f.GetFQPayloadTableName(), e.ie, offset,
+	)
 }
 
 func (f *FileToTableSystem) checkIfFileAndPayloadTableExist(
